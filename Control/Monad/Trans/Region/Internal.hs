@@ -1,16 +1,19 @@
-{-# LANGUAGE CPP                        -- For portability.
-           , UnicodeSyntax              -- Makes it look so nice.
-           , NoImplicitPrelude          -- I like to be fully explicit.
-           , GeneralizedNewtypeDeriving -- I'm lazy.
-           , RankNTypes                 -- Provides the essential type-safety.
-           , KindSignatures             -- To help the type-checker.
-           , EmptyDataDecls             -- For the RootRegion type.
-           , MultiParamTypeClasses      -- For the AncestorRegion class.
-           , UndecidableInstances       -- For the AncestorRegion instances.
-           , FlexibleInstances          -- ,,          ,,          ,,
-           , OverlappingInstances       -- ,,          ,,          ,,
-           , FlexibleContexts           -- For unsafeLiftControl
-  #-}
+{-# LANGUAGE NoImplicitPrelude, GeneralizedNewtypeDeriving, KindSignatures,
+             RankNTypes #-}
+
+-- {-# LANGUAGE CPP                        -- For portability.
+--            , UnicodeSyntax              -- Makes it look so nice.
+--            , NoImplicitPrelude          -- I like to be fully explicit.
+--            , GeneralizedNewtypeDeriving -- I'm lazy.
+--            , RankNTypes                 -- Provides the essential type-safety.
+--            , KindSignatures             -- To help the type-checker.
+--            , EmptyDataDecls             -- For the RootRegion type.
+--            , MultiParamTypeClasses      -- For the AncestorRegion class.
+--            , UndecidableInstances       -- For the AncestorRegion instances.
+--            , FlexibleInstances          -- ,,          ,,          ,,
+--            , OverlappingInstances       -- ,,          ,,          ,,
+--            , FlexibleContexts           -- For unsafeLiftControl
+--   #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -29,43 +32,43 @@
 --
 --------------------------------------------------------------------------------
 
-module Control.Monad.Trans.Region.Internal
-    ( -- * Regions
-      RegionT
-
-      -- * Registering finalizers
-    , Finalizer
-    , FinalizerHandle
-    , onExit
-
-      -- * Running regions
-    , runRegionT
-
-      -- * Duplication
-    , Dup(dup)
-
-      -- * Ancestor relation between regions
-    , AncestorRegion
-
-      -- * Special regions
-      -- ** The root region
-    , RootRegion
-
-      -- ** Local regions
-    , LocalRegion, Local, unsafeStripLocal
-
-      -- * MonadTransControl & MonadControlIO
-    , RegionControlIO, unsafeLiftControlIO
-    , unsafeLiftControl
-    , unsafeControlIO
-    , unsafeLiftIOOp
-    , unsafeLiftIOOp_
-
-      -- * Utilities for writing monadic instances
-    , liftCallCC
-    , mapRegionT
-    , liftCatch
-    ) where
+-- module Control.Monad.Trans.Region.Internal
+--     ( -- * Regions
+--       RegionT
+-- 
+--       -- * Registering finalizers
+--     , Finalizer
+--     , FinalizerHandle
+--     , onExit
+-- 
+--       -- * Running regions
+--     , runRegionT
+-- 
+--       -- * Duplication
+--     , Dup(dup)
+-- 
+--       -- * Ancestor relation between regions
+--     , AncestorRegion
+-- 
+--       -- * Special regions
+--       -- ** The root region
+--     , RootRegion
+-- 
+--       -- ** Local regions
+--     , LocalRegion, Local, unsafeStripLocal
+-- 
+--       -- * MonadTransControl & MonadControlIO
+--     , RegionControlIO, unsafeLiftControlIO
+--     , unsafeLiftControl
+--     , unsafeControlIO
+--     , unsafeLiftIOOp
+--     , unsafeLiftIOOp_
+-- 
+--       -- * Utilities for writing monadic instances
+--     , liftCallCC
+--     , mapRegionT
+--     , liftCatch
+--     ) where
 
 
 --------------------------------------------------------------------------------
@@ -73,58 +76,70 @@ module Control.Monad.Trans.Region.Internal
 --------------------------------------------------------------------------------
 
 -- from base:
-import Prelude             ( (+), (-), seq )
-import Control.Applicative ( Applicative, Alternative )
-import Control.Monad       ( Monad, return, when, forM_, join, liftM, MonadPlus,  )
-import Control.Monad.Fix   ( MonadFix )
-import Control.Exception   ( bracket )
-import System.IO           ( IO )
-import Data.Function       ( ($) )
-import Data.Functor        ( Functor )
-import Data.Int            ( Int )
-import Data.IORef          ( IORef, newIORef
-                           , readIORef, modifyIORef, atomicModifyIORef
-                           )
-#if __GLASGOW_HASKELL__ < 700
-import Prelude             ( fromInteger )
-import Control.Monad       ( (>>=), (>>), fail )
-#endif
-
--- from monad-control:
-import Control.Monad.Trans.Control ( Run, RunInBase, liftControl )
-import Control.Monad.IO.Control    ( MonadControlIO, liftControlIO )
-
+import Prelude ((-))
+import Control.Applicative (Applicative, Alternative)
+import Control.Exception (bracket)
+import Control.Monad (Monad, MonadPlus, return)
+import Control.Monad.Fix (MonadFix)
+import Data.Function (($))
+import Data.Functor (Functor)
+import Data.Int (Int)
+import System.IO (IO)
+-- import Control.Exception   ( bracket )
+-- import System.IO           ( IO )
+-- import Data.Function       ( ($) )
+-- import Data.Functor        ( Functor )
+-- import Data.Int            ( Int )
+-- import Data.IORef          ( IORef, newIORef
+--                            , readIORef, modifyIORef, atomicModifyIORef
+--                            )
+import Data.IORef
+-- #if __GLASGOW_HASKELL__ < 700
+-- import Prelude             ( fromInteger )
+-- import Control.Monad       ( (>>=), (>>), fail )
+-- #endif
+-- 
+-- -- from monad-control:
+-- import Control.Monad.Trans.Control ( Run, RunInBase, liftControl )
+-- import Control.Monad.IO.Control    ( MonadControlIO, liftControlIO )
+-- 
 -- from transformers:
-import Control.Monad.Trans.Class ( MonadTrans, lift )
-import Control.Monad.IO.Class    ( MonadIO, liftIO )
+import Control.Monad.Trans.Class (MonadTrans)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+-- import Control.Monad.Trans.Class ( MonadTrans, lift )
+-- import Control.Monad.IO.Class    ( MonadIO, liftIO )
+-- 
+-- import qualified Control.Monad.Trans.Reader as R ( liftCallCC, liftCatch )
+-- import Control.Monad.Trans.Reader ( ReaderT(ReaderT), runReaderT, mapReaderT )
+import Control.Monad.Reader (ReaderT (ReaderT))
+-- 
+-- -- from base-unicode-symbols:
+-- import Data.Eq.Unicode       ( (≡) )
+-- import Data.Function.Unicode ( (∘) )
+-- 
+-- -- Handling the new asynchronous exceptions API in base-4.3:
+-- #if MIN_VERSION_base(4,3,0)
+-- import Control.Exception ( mask_ )
+-- #else
+-- import Control.Exception ( block )
+-- mask_ ∷ IO α → IO α
+-- mask_ = block
+-- #endif
 
-import qualified Control.Monad.Trans.Reader as R ( liftCallCC, liftCatch )
-import Control.Monad.Trans.Reader ( ReaderT(ReaderT), runReaderT, mapReaderT )
-
--- from base-unicode-symbols:
-import Data.Eq.Unicode       ( (≡) )
-import Data.Function.Unicode ( (∘) )
-
--- Handling the new asynchronous exceptions API in base-4.3:
-#if MIN_VERSION_base(4,3,0)
-import Control.Exception ( mask_ )
-#else
-import Control.Exception ( block )
-mask_ ∷ IO α → IO α
-mask_ = block
-#endif
 
 
---------------------------------------------------------------------------------
--- * Regions
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+-- * Regions                                                                -- 
+------------------------------------------------------------------------------
 
-{-| A monad transformer in which scarce resources can be opened. When the region
-terminates, all opened resources will be closed automatically. It's a type error
-to return an opened resource from the region. The latter ensures no I/O with
-closed resources is possible.
--}
-newtype RegionT s pr α = RegionT (ReaderT (IORef [RefCountedFinalizer]) pr α)
+
+------------------------------------------------------------------------------
+-- | A monad transformer in which scarce resources can be opened. When the
+-- region terminates, all opened resources will be closed automatically. It's
+-- a type error to return an opened resource from the region; input-output
+-- with closed resources is impossible.
+
+newtype RegionT s p a = RegionT (ReaderT (IORef [RefCountedFinalizer]) p a)
     deriving ( Functor
              , Applicative
              , Alternative
@@ -135,94 +150,105 @@ newtype RegionT s pr α = RegionT (ReaderT (IORef [RefCountedFinalizer]) pr α)
              , MonadIO
              )
 
-unRegionT ∷ RegionT s pr α → ReaderT (IORef [RefCountedFinalizer]) pr α
+unRegionT :: RegionT s p a -> ReaderT (IORef [RefCountedFinalizer]) p a
 unRegionT (RegionT r) = r
 
--- | A 'Finalizer' paired with its reference count which defines how many times
--- it has been registered in some region.
-data RefCountedFinalizer = RefCountedFinalizer !Finalizer !(IORef RefCnt)
 
--- | An 'IO' computation that closes or finalizes a resource. For example
--- \"@hClose someHandle@\" or \"@free somePtr@\".
-type Finalizer = IO ()
+------------------------------------------------------------------------------
+-- | An 'IO' computation that closes or finalizes a resource is paired with
+-- its reference count, which defines how many times it has been registered in
+-- some region.
 
-type RefCnt = Int
+data RefCountedFinalizer = RefCountedFinalizer !(IO ()) !(IORef Int)
 
 
---------------------------------------------------------------------------------
--- * Registering finalizers
---------------------------------------------------------------------------------
 
-{-| A handle to a 'Finalizer' that allows you to duplicate it to a parent region
-using 'dup'.
-
-Duplicating a finalizer means that instead of it being performed when the
-current region terminates it is performed when the parent region terminates.
--}
-newtype FinalizerHandle (r ∷ * → *) = FinalizerHandle RefCountedFinalizer
-
-{-| Register the 'Finalizer' in the region. When the region terminates all
-registered finalizers will be perfomed if they're not duplicated to a parent
-region.
-
-Note that finalizers are run in LIFO order (Last In First Out). So executing the following:
-
-@
-runRegionT $ do
-  _ <- onExit $ putStrLn \"finalizer 1\"
-  _ <- onExit $ putStrLn \"finalizer 2\"
-  return ()
-@
-
-yields:
-
-@
-finalizer 2
-finalizer 1
-@
--}
-onExit ∷ MonadIO pr ⇒ Finalizer → RegionT s pr (FinalizerHandle (RegionT s pr))
-onExit finalizer = RegionT $ ReaderT $ \hsIORef → liftIO $ do
-                     refCntIORef ← newIORef 1
-                     let h = RefCountedFinalizer finalizer refCntIORef
-                     modifyIORef hsIORef (h:)
-                     return $ FinalizerHandle h
+------------------------------------------------------------------------------
+-- * Registering finalizers                                                 --
+------------------------------------------------------------------------------
 
 
---------------------------------------------------------------------------------
--- * Running regions
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+-- | A handle to a finalizer that allows you to duplicate it to a parent
+-- region using 'dup'.
+--
+-- Duplicating a finalizer means that instead of it being performed when the
+-- current region terminates it is performed when the parent region
+-- terminates.
 
-{-| Execute a region inside its parent region @pr@.
+newtype FinalizerHandle (r :: * -> *) = FinalizerHandle RefCountedFinalizer
 
-All resources which have been opened in the given region and which haven't been
-duplicated using 'dup', will be closed on exit from this function wether by
-normal termination or by raising an exception.
 
-Also all resources which have been duplicated to this region from a child region
-are closed on exit if they haven't been duplicated themselves.
+------------------------------------------------------------------------------
+-- | Register the finalizer in the region. When the region terminates all
+-- registered finalizers will be perfomed if they're not duplicated to a
+-- parent region.
+-- 
+-- Note that finalizers are run in LIFO order (Last In First Out). So
+-- executing the following:
+-- 
+-- @
+-- runRegionT $ do
+--   _ <- onExit $ putStrLn \"finalizer 1\"
+--   _ <- onExit $ putStrLn \"finalizer 2\"
+--   return ()
+-- @
+-- 
+-- yields:
+-- 
+-- @
+-- finalizer 2
+-- finalizer 1
+-- @
 
-Note the type variable @s@ of the region wich is only quantified over the region
-itself. This ensures that /all/ values, having a type containing @s@, can /not/
-be returned from this function. (Note the similarity with the @ST@ monad.)
+onExit :: MonadIO p => IO () -> RegionT s p (FinalizerHandle (RegionT s p))
+onExit finalizer = RegionT $ ReaderT $ \hsIORef -> liftIO $ do
+    refCntIORef <- newIORef 1
+    let h = RefCountedFinalizer finalizer refCntIORef
+    modifyIORef hsIORef (h:)
+    return $ FinalizerHandle h
 
-Note that it is possible to run a region inside another region.
--}
-runRegionT ∷ RegionControlIO pr ⇒ (∀ s. RegionT s pr α) → pr α
+
+
+------------------------------------------------------------------------------
+-- * Running regions                                                        --
+------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------
+-- | Execute a region inside its parent region @p@.
+-- 
+-- All resources which have been opened in the given region and which haven't
+-- been duplicated using 'dup', will be closed on exit from this function
+-- whether by normal termination or by raising an exception.
+-- 
+-- Also, all resources which have been duplicated to this region from a child
+-- region are closed on exit if they haven't been duplicated themselves.
+-- 
+-- Note the type variable @s@ of the region; it is only quantified over the
+-- region itself. This ensures that /no/ values having a type containing
+-- @s@ can be returned from this function. (In this way, RegionT is similar to
+-- the @ST@ monad.)
+-- 
+-- It is possible to run a region inside another region.
+
+runRegionT :: RegionControlIO p => (forall s. RegionT s p a) -> p a
 runRegionT r = unsafeLiftIOOp (bracket before after) thing
-    where
-      before = newIORef []
-      thing hsIORef = runReaderT (unRegionT r) hsIORef
-      after hsIORef = do
-        hs' ← readIORef hsIORef
-        forM_ hs' $ \(RefCountedFinalizer finalizer refCntIORef) → do
-          refCnt ← decrement refCntIORef
-          when (refCnt ≡ 0) finalizer
-          where
-            decrement ∷ IORef RefCnt → IO RefCnt
-            decrement ioRef = atomicModifyIORef ioRef $ \refCnt →
-                                let refCnt' = refCnt - 1
-                                in (refCnt', refCnt')
+  where
+    before = newIORef []
+    thing hsIORef = runReaderT (unRegionT r) hsIORef
+    after hsIORef = do
+        hs' <- readIORef hsIORef
+        forM_ hs' $ \(RefCountedFinalizer finalizer refCntIORef) -> do
+            refCnt <- decrement refCntIORef
+            when (refCnt == 0) finalizer
+
+
+------------------------------------------------------------------------------
+decrement :: IORef Int -> IO Int
+decrement x = atomicModifyIORef x $ \ref_cnt0 ->
+    let ref_cnt1 = ref_cnt0 - 1
+    in  (ref_cnt1, ref_cnt1)
 
 
 --------------------------------------------------------------------------------
@@ -272,29 +298,29 @@ Note that @r1hDup :: RegionalHandle (RegionT ps ppr)@
 
 Back in the parent region you can safely operate on @r1hDup@.
 -}
-class Dup h where
-    dup ∷ MonadIO ppr
-        ⇒ h (RegionT cs (RegionT ps ppr))
-        →    RegionT cs (RegionT ps ppr)
-                     (h (RegionT ps ppr))
-
-instance Dup FinalizerHandle where
-    dup = lift ∘ copy
-
-copy ∷ MonadIO pr
-     ⇒ FinalizerHandle r
-     → RegionT s pr (FinalizerHandle (RegionT s pr))
-copy (FinalizerHandle h@(RefCountedFinalizer _ refCntIORef)) =
-  RegionT $ ReaderT $ \hsIORef → liftIO $ mask_ $ do
-    increment refCntIORef
-    modifyIORef hsIORef (h:)
-    return $ FinalizerHandle h
-
-increment ∷ IORef RefCnt → IO ()
-increment ioRef = do refCnt' ← atomicModifyIORef ioRef $ \refCnt →
-                                 let refCnt' = refCnt + 1
-                                 in (refCnt', refCnt')
-                     refCnt' `seq` return ()
+-- class Dup h where
+--     dup ∷ MonadIO ppr
+--         ⇒ h (RegionT cs (RegionT ps ppr))
+--         →    RegionT cs (RegionT ps ppr)
+--                      (h (RegionT ps ppr))
+-- 
+-- instance Dup FinalizerHandle where
+--     dup = lift ∘ copy
+-- 
+-- copy ∷ MonadIO pr
+--      ⇒ FinalizerHandle r
+--      → RegionT s pr (FinalizerHandle (RegionT s pr))
+-- copy (FinalizerHandle h@(RefCountedFinalizer _ refCntIORef)) =
+--   RegionT $ ReaderT $ \hsIORef → liftIO $ mask_ $ do
+--     increment refCntIORef
+--     modifyIORef hsIORef (h:)
+--     return $ FinalizerHandle h
+-- 
+-- increment ∷ IORef RefCnt → IO ()
+-- increment ioRef = do refCnt' ← atomicModifyIORef ioRef $ \refCnt →
+--                                  let refCnt' = refCnt + 1
+--                                  in (refCnt', refCnt')
+--                      refCnt' `seq` return ()
 
 
 --------------------------------------------------------------------------------
@@ -328,14 +354,14 @@ add new instances of 'AncestorRegion' (as these would have to be made instances 
 -- The implementation uses type-level recursion, so it is no surprise we need
 -- UndecidableInstances.
 
-class (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
-
-instance (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
-
-class InternalAncestorRegion (pr ∷ * → *) (cr ∷ * → *)
-
-instance InternalAncestorRegion (RegionT s m) (RegionT s m)
-instance (InternalAncestorRegion pr cr) ⇒ InternalAncestorRegion pr (RegionT s cr)
+-- class (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
+-- 
+-- instance (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
+-- 
+-- class InternalAncestorRegion (pr ∷ * → *) (cr ∷ * → *)
+-- 
+-- instance InternalAncestorRegion (RegionT s m) (RegionT s m)
+-- instance (InternalAncestorRegion pr cr) ⇒ InternalAncestorRegion pr (RegionT s cr)
 
 
 --------------------------------------------------------------------------------
@@ -350,9 +376,9 @@ which are opened on program startup and which shouldn't be closed when a region
 terminates. Another example is the @nullPtr@ which is a memory pointer which
 doesn't point to any allocated memory so doesn't need to be freed.
 -}
-data RootRegion α
+-- data RootRegion α
 
-instance InternalAncestorRegion RootRegion (RegionT s m)
+-- instance InternalAncestorRegion RootRegion (RegionT s m)
 
 
 --------------------------------------------------------------------------------
@@ -377,7 +403,7 @@ is handled locally by @alloca@ instead.
 The type variable @sl@, which is only quantified over the continuation, ensures
 that locally opened resources don't escape.
 -}
-data LocalRegion sl s α
+-- data LocalRegion sl s α
 
 {-|
 A type used to tag regions in which locally created handles (handles tagged with
@@ -387,12 +413,12 @@ Note than any handle which is created in a @RegionT (Local s)@ can be used
 outside that region (@RegionT s@) and visa versa
 (except for 'LocalRegion'-tagged handles).
 -}
-data Local s
+-- data Local s
 
-instance InternalAncestorRegion (LocalRegion sf s) (RegionT (Local s) m)
+-- instance InternalAncestorRegion (LocalRegion sf s) (RegionT (Local s) m)
 
-instance InternalAncestorRegion (RegionT        s  m) (RegionT (Local s) m)
-instance InternalAncestorRegion (RegionT (Local s) m) (RegionT        s  m)
+-- instance InternalAncestorRegion (RegionT        s  m) (RegionT (Local s) m)
+-- instance InternalAncestorRegion (RegionT (Local s) m) (RegionT        s  m)
 
 {-|
 Convert a 'Local' region to a regular region.
@@ -400,85 +426,88 @@ Convert a 'Local' region to a regular region.
 This function is unsafe because it allows you to use a 'LocalRegion'-tagged
 handle outside its 'Local' region.
 -}
-unsafeStripLocal ∷ RegionT (Local s) pr α → RegionT s pr α
-unsafeStripLocal = RegionT ∘ unRegionT
+-- unsafeStripLocal ∷ RegionT (Local s) pr α → RegionT s pr α
+-- unsafeStripLocal = RegionT ∘ unRegionT
 
 
---------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
 -- * MonadTransControl & MonadControlIO
+------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------
+-- | Regions do not have an instance for 'MonadControlIO' since that would
+-- break the safety guarantees. (Think about lifting 'forkIO' into a region!)
+-- 
+-- However 'runRegionT' and other operations on regions do need the ability to
+-- lift control operations. This is where the 'RegionControlIO' class comes
+-- in. This class is identical to `MonadControlIO` but its
+-- 'unsafeLiftControlIO' method is not exported by this module. So user can't
+-- accidentally break the safety.
+-- 
+-- Note that a 'RegionT' is an instance of this class. For the rest there is a
+-- catch-all @instance 'MonadControlIO' m => 'RegionControlIO' m@.
+
+class MonadIO m => RegionControlIO m where
+    -- This function behaves like `liftControlIO` but can be used on regions.
+    --
+    -- You can safely use this function to lift any control operator other
+    -- than `forkIO` into a region.
+    --
+    -- See the following why it's unsafe to lift `forkIO` using this function:
+    -- <https://github.com/basvandijk/regions/wiki/unsafeLiftControlIO>
+    unsafeLiftControlIO :: (RunInBase m IO -> IO a) -> m a
+
+-- instance RegionControlIO pr ⇒ RegionControlIO (RegionT s pr) where
+--     unsafeLiftControlIO f =
+--         unsafeLiftControl $ \runInPr →
+--           unsafeLiftControlIO $ \runInBase →
+--             let run = liftM (join ∘ lift) ∘ runInBase ∘ runInPr
+--             in f run
+-- 
+-- instance MonadControlIO m ⇒ RegionControlIO m where
+--     unsafeLiftControlIO = liftControlIO
+
 --------------------------------------------------------------------------------
 
-{-|
-Regions do not have an instance for 'MonadControlIO' since that would break the
-safety guarantees. (Think about lifting 'forkIO' into a region!)
+-- unsafeLiftControl ∷ Monad pr ⇒ (Run (RegionT s) → pr α) → RegionT s pr α
+-- unsafeLiftControl f = RegionT $ liftControl $ \runReader →
+--                         f $ liftM RegionT ∘ runReader ∘ unRegionT
+-- 
+-- unsafeControlIO ∷ RegionControlIO m ⇒ (RunInBase m IO → IO (m α)) → m α
+-- unsafeControlIO = join ∘ unsafeLiftControlIO
 
-However 'runRegionT' and other operations on regions do need the ability to lift
-control operations. This is where the 'RegionControlIO' class comes in. This
-class is identical to `MonadControlIO` but its 'unsafeLiftControlIO' method is
-not exported by this module. So user can't accidentally break the safety.
 
-Note that a 'RegionT' is an instance of this class. For the rest there is a
-catch-all @instance 'MonadControlIO' m => 'RegionControlIO' m@.
--}
-class MonadIO m ⇒ RegionControlIO m where
-    {-|
-    This function behaves like `liftControlIO` but can be used on regions.
+------------------------------------------------------------------------------
+unsafeLiftIOOp :: RegionControlIO m
+               => ((a -> IO (m b)) -> IO (m c))
+               -> ((a -> m b) -> m c)
+unsafeLiftIOOp f = \g -> unsafeControlIO $ \runInIO -> f $ runInIO . g
 
-    Note that you can safely use this function to lift any control operator
-    other than `forkIO` into a region.
-
-    See the following why it's unsafe to lift `forkIO` using this function:
-    <https://github.com/basvandijk/regions/wiki/unsafeLiftControlIO>
-    -}
-    unsafeLiftControlIO ∷ (RunInBase m IO → IO α) → m α
-
-instance RegionControlIO pr ⇒ RegionControlIO (RegionT s pr) where
-    unsafeLiftControlIO f =
-        unsafeLiftControl $ \runInPr →
-          unsafeLiftControlIO $ \runInBase →
-            let run = liftM (join ∘ lift) ∘ runInBase ∘ runInPr
-            in f run
-
-instance MonadControlIO m ⇒ RegionControlIO m where
-    unsafeLiftControlIO = liftControlIO
-
---------------------------------------------------------------------------------
-
-unsafeLiftControl ∷ Monad pr ⇒ (Run (RegionT s) → pr α) → RegionT s pr α
-unsafeLiftControl f = RegionT $ liftControl $ \runReader →
-                        f $ liftM RegionT ∘ runReader ∘ unRegionT
-
-unsafeControlIO ∷ RegionControlIO m ⇒ (RunInBase m IO → IO (m α)) → m α
-unsafeControlIO = join ∘ unsafeLiftControlIO
-
-unsafeLiftIOOp ∷ RegionControlIO m
-               ⇒ ((α → IO (m β)) → IO (m γ))
-               → ((α →     m β)  →     m γ)
-unsafeLiftIOOp f = \g → unsafeControlIO $ \runInIO → f $ runInIO ∘ g
-
-unsafeLiftIOOp_ ∷ RegionControlIO m
-                ⇒ (IO (m α) → IO (m β))
-                → (    m α →      m β)
-unsafeLiftIOOp_ f = \m → unsafeControlIO $ \runInIO → f $ runInIO m
+-- unsafeLiftIOOp_ ∷ RegionControlIO m
+--                 ⇒ (IO (m α) → IO (m β))
+--                 → (    m α →      m β)
+-- unsafeLiftIOOp_ f = \m → unsafeControlIO $ \runInIO → f $ runInIO m
 
 --------------------------------------------------------------------------------
 -- * Utilities for writing monadic instances
 --------------------------------------------------------------------------------
 
 -- | Lift a @callCC@ operation to the new monad.
-liftCallCC ∷ (((α → pr β) → pr α) → pr α)
-           → (((α → RegionT s pr β) → RegionT s pr α) → RegionT s pr α)
-liftCallCC callCC = \f → RegionT $ R.liftCallCC callCC $ unRegionT ∘ f ∘ (RegionT ∘)
+-- liftCallCC ∷ (((α → pr β) → pr α) → pr α)
+--            → (((α → RegionT s pr β) → RegionT s pr α) → RegionT s pr α)
+-- liftCallCC callCC = \f → RegionT $ R.liftCallCC callCC $ unRegionT ∘ f ∘ (RegionT ∘)
 
 -- | Transform the computation inside a region.
-mapRegionT ∷ (m α → n β)
-           → (RegionT s m α → RegionT s n β)
-mapRegionT f = RegionT ∘ mapReaderT f ∘ unRegionT
+-- mapRegionT ∷ (m α → n β)
+--            → (RegionT s m α → RegionT s n β)
+-- mapRegionT f = RegionT ∘ mapReaderT f ∘ unRegionT
 
 -- | Lift a @catchError@ operation to the new monad.
-liftCatch ∷ (pr α → (e → pr α) → pr α)
-          → (RegionT s pr α → (e → RegionT s pr α) → RegionT s pr α)
-liftCatch f = \m h → RegionT $ R.liftCatch f (unRegionT m) (unRegionT ∘ h)
+-- liftCatch ∷ (pr α → (e → pr α) → pr α)
+--           → (RegionT s pr α → (e → RegionT s pr α) → RegionT s pr α)
+-- liftCatch f = \m h → RegionT $ R.liftCatch f (unRegionT m) (unRegionT ∘ h)
 
 
 -- The End ---------------------------------------------------------------------

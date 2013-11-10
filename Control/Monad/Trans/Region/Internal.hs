@@ -1,5 +1,5 @@
-{-# LANGUAGE NoImplicitPrelude, GeneralizedNewtypeDeriving, KindSignatures,
-             RankNTypes #-}
+{-# LANGUAGE GADTs, NoImplicitPrelude, GeneralizedNewtypeDeriving,
+             KindSignatures, RankNTypes, ScopedTypeVariables #-}
 
 -- {-# LANGUAGE CPP                        -- For portability.
 --            , UnicodeSyntax              -- Makes it look so nice.
@@ -78,13 +78,18 @@
 -- from base:
 import Prelude ((-))
 import Control.Applicative (Applicative, Alternative)
-import Control.Exception (bracket)
-import Control.Monad (Monad, MonadPlus, return)
+import Control.Category ((.), id)
+import Control.Exception (Exception)
+import Control.Monad (Monad, MonadPlus, return, forM_, when)
 import Control.Monad.Fix (MonadFix)
+import Data.Eq ((==))
 import Data.Function (($))
 import Data.Functor (Functor)
 import Data.Int (Int)
 import System.IO (IO)
+
+import qualified Control.Exception as E
+
 -- import Control.Exception   ( bracket )
 -- import System.IO           ( IO )
 -- import Data.Function       ( ($) )
@@ -104,14 +109,14 @@ import Data.IORef
 -- import Control.Monad.IO.Control    ( MonadControlIO, liftControlIO )
 -- 
 -- from transformers:
-import Control.Monad.Trans.Class (MonadTrans)
+import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 -- import Control.Monad.Trans.Class ( MonadTrans, lift )
 -- import Control.Monad.IO.Class    ( MonadIO, liftIO )
 -- 
 -- import qualified Control.Monad.Trans.Reader as R ( liftCallCC, liftCatch )
 -- import Control.Monad.Trans.Reader ( ReaderT(ReaderT), runReaderT, mapReaderT )
-import Control.Monad.Reader (ReaderT (ReaderT))
+import Control.Monad.Reader (ReaderT (ReaderT), runReaderT)
 -- 
 -- -- from base-unicode-symbols:
 -- import Data.Eq.Unicode       ( (≡) )
@@ -232,8 +237,8 @@ onExit finalizer = RegionT $ ReaderT $ \hsIORef -> liftIO $ do
 -- 
 -- It is possible to run a region inside another region.
 
-runRegionT :: RegionControlIO p => (forall s. RegionT s p a) -> p a
-runRegionT r = unsafeLiftIOOp (bracket before after) thing
+runRegionT :: RMonadIO p => (forall s. RegionT s p a) -> p a
+runRegionT r = (bracket (lift_io before) (lift_io . after)) thing
   where
     before = newIORef []
     thing hsIORef = runReaderT (unRegionT r) hsIORef
@@ -251,59 +256,95 @@ decrement x = atomicModifyIORef x $ \ref_cnt0 ->
     in  (ref_cnt1, ref_cnt1)
 
 
---------------------------------------------------------------------------------
--- * Duplication
---------------------------------------------------------------------------------
+class Monad p => RMonadIO p where
+    bracket :: p a -> (a -> p b) -> (a -> p c) -> p c
+    catch   :: Exception e => p a -> (e -> p a) -> p a
+    lift_io :: IO a -> p a
 
-{-| Duplicate an @h@ in the parent region. This @h@ will usually be some type of
-regional handle.
 
-For example, suppose you run the following region:
+instance RMonadIO IO where
+    bracket = E.bracket
+    catch   = E.catch
+    lift_io = id
 
-@
-runRegionT $ do
-@
 
-Inside this region you run a nested /child/ region like:
+instance RMonadIO m => RMonadIO (ReaderT r m) where
+    bracket before after during = ReaderT $ \r ->
+        let runner :: RMonadIO m => ReaderT r m a -> m a
+            runner x = runReaderT x r
+        in  bracket (runner before)
+                    (runner . after)
+                    (runner . during)
+    catch x handler = ReaderT $ \r ->
+        catch (runReaderT x r)
+              (\e -> runReaderT (handler e) r)
+    lift_io = lift . lift_io
 
-@
-    r1hDup <- runRegionT $ do
-@
 
-Now in this child region you open the resource @r1@:
+instance RMonadIO m => RMonadIO (RegionT s m) where
+    bracket before after during = RegionT $
+        bracket (unRegionT before)
+                (unRegionT . after)
+                (unRegionT . during)
+    catch x handler = RegionT $
+        catch (unRegionT x)
+              (unRegionT . handler)
+    lift_io = RegionT . lift_io
 
-@
-        r1h <- open r1
-@
+------------------------------------------------------------------------------
+-- * Duplication                                                            --
+------------------------------------------------------------------------------
 
-...yielding the regional handle @r1h@. Note that:
 
-@r1h :: RegionalHandle (RegionT cs (RegionT ps ppr))@
-
-where @cs@ is bound by the inner (child) @runRegionT@ and @ps@ is
-bound by the outer (parent) @runRegionT@.
-
-Suppose you want to use the resulting regional handle @r1h@ in the /parent/
-region. You can't simply @return r1h@ because then the type variable @cs@,
-escapes the inner region.
-
-However, if you duplicate the regional handle you can safely return it.
-
-@
-        r1hDup <- dup r1h
-        return r1hDup
-@
-
-Note that @r1hDup :: RegionalHandle (RegionT ps ppr)@
-
-Back in the parent region you can safely operate on @r1hDup@.
--}
--- class Dup h where
---     dup ∷ MonadIO ppr
---         ⇒ h (RegionT cs (RegionT ps ppr))
---         →    RegionT cs (RegionT ps ppr)
---                      (h (RegionT ps ppr))
+------------------------------------------------------------------------------
+-- | Duplicate an @h@ in the parent region. This @h@ will usually be some type
+-- of regional handle.
 -- 
+-- For example, suppose you run the following region:
+-- 
+-- @
+-- runRegionT $ do
+-- @
+-- 
+-- Inside this region you run a nested /child/ region like:
+-- 
+-- @
+--     r1hDup <- runRegionT $ do
+-- @
+-- 
+-- Now in this child region you open the resource @r1@:
+-- 
+-- @
+--         r1h <- open r1
+-- @
+-- 
+-- ...yielding the regional handle @r1h@. Note that:
+-- 
+-- @r1h :: RegionalHandle (RegionT cs (RegionT ps ppr))@
+-- 
+-- where @cs@ is bound by the inner (child) @runRegionT@ and @ps@ is
+-- bound by the outer (parent) @runRegionT@.
+-- 
+-- Suppose you want to use the resulting regional handle @r1h@ in the /parent/
+-- region. You can't simply @return r1h@ because then the type variable @cs@,
+-- escapes the inner region.
+-- 
+-- However, if you duplicate the regional handle you can safely return it.
+-- 
+-- @
+--         r1hDup <- dup r1h
+--         return r1hDup
+-- @
+-- 
+-- Note that @r1hDup :: RegionalHandle (RegionT ps ppr)@
+-- 
+-- Back in the parent region you can safely operate on @r1hDup@.
+
+class Dup h where
+    dup :: MonadIO p
+        => h (RegionT s (RegionT s' p))
+        -> RegionT s (RegionT s' p) (h (RegionT s' p))
+
 -- instance Dup FinalizerHandle where
 --     dup = lift ∘ copy
 -- 
@@ -449,7 +490,7 @@ handle outside its 'Local' region.
 -- Note that a 'RegionT' is an instance of this class. For the rest there is a
 -- catch-all @instance 'MonadControlIO' m => 'RegionControlIO' m@.
 
-class MonadIO m => RegionControlIO m where
+--class MonadIO m => RegionControlIO m where
     -- This function behaves like `liftControlIO` but can be used on regions.
     --
     -- You can safely use this function to lift any control operator other
@@ -457,7 +498,7 @@ class MonadIO m => RegionControlIO m where
     --
     -- See the following why it's unsafe to lift `forkIO` using this function:
     -- <https://github.com/basvandijk/regions/wiki/unsafeLiftControlIO>
-    unsafeLiftControlIO :: (RunInBase m IO -> IO a) -> m a
+--    unsafeLiftControlIO :: (RunInBase m IO -> IO a) -> m a
 
 -- instance RegionControlIO pr ⇒ RegionControlIO (RegionT s pr) where
 --     unsafeLiftControlIO f =
@@ -480,10 +521,10 @@ class MonadIO m => RegionControlIO m where
 
 
 ------------------------------------------------------------------------------
-unsafeLiftIOOp :: RegionControlIO m
-               => ((a -> IO (m b)) -> IO (m c))
-               -> ((a -> m b) -> m c)
-unsafeLiftIOOp f = \g -> unsafeControlIO $ \runInIO -> f $ runInIO . g
+-- unsafeLiftIOOp :: RegionControlIO m
+--                => ((a -> IO (m b)) -> IO (m c))
+--                -> ((a -> m b) -> m c)
+-- unsafeLiftIOOp f = \g -> unsafeControlIO $ \runInIO -> f $ runInIO . g
 
 -- unsafeLiftIOOp_ ∷ RegionControlIO m
 --                 ⇒ (IO (m α) → IO (m β))

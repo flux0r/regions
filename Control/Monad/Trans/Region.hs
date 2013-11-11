@@ -19,10 +19,10 @@ module Control.Monad.Trans.Region
       -- * Running regions
     , runRegionT
 
-    , RegionControlIO
+--     , RegionControlIO
 
       -- * Duplication
-    , Dup(dup)
+    , Dup (dup)
 
       -- * Ancestor relation between regions
     , AncestorRegion
@@ -35,10 +35,9 @@ module Control.Monad.Trans.Region
     , LocalRegion, Local
 
       -- * Utilities for writing monadic instances
-    , liftCallCC
-    , mapRegionT
-    , liftCatch
+--     , liftCallCC
+--     , mapRegionT
+--     , liftCatch
     ) where
 
 import Control.Monad.Trans.Region.Internal
-

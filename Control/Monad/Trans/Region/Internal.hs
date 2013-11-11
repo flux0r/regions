@@ -1,5 +1,7 @@
-{-# LANGUAGE GADTs, NoImplicitPrelude, GeneralizedNewtypeDeriving,
-             KindSignatures, RankNTypes, ScopedTypeVariables #-}
+{-# LANGUAGE NoImplicitPrelude, GeneralizedNewtypeDeriving,
+             KindSignatures, RankNTypes, ScopedTypeVariables,
+             MultiParamTypeClasses, FlexibleInstances,
+             UndecidableInstances #-}
 
 -- {-# LANGUAGE CPP                        -- For portability.
 --            , UnicodeSyntax              -- Makes it look so nice.
@@ -32,32 +34,31 @@
 --
 --------------------------------------------------------------------------------
 
--- module Control.Monad.Trans.Region.Internal
---     ( -- * Regions
---       RegionT
--- 
---       -- * Registering finalizers
---     , Finalizer
---     , FinalizerHandle
---     , onExit
--- 
---       -- * Running regions
---     , runRegionT
--- 
---       -- * Duplication
---     , Dup(dup)
--- 
---       -- * Ancestor relation between regions
---     , AncestorRegion
--- 
---       -- * Special regions
---       -- ** The root region
---     , RootRegion
--- 
---       -- ** Local regions
---     , LocalRegion, Local, unsafeStripLocal
--- 
---       -- * MonadTransControl & MonadControlIO
+module Control.Monad.Trans.Region.Internal
+    ( -- * Regions
+      RegionT
+
+      -- * Registering finalizers
+    , FinalizerHandle
+    , onExit
+
+      -- * Running regions
+    , runRegionT
+
+      -- * Duplication
+    , Dup (dup)
+
+      -- * Ancestor relation between regions
+    , AncestorRegion
+
+      -- * Special regions
+      -- ** The root region
+    , RootRegion
+
+      -- ** Local regions
+    , LocalRegion, Local, unsafeStripLocal
+
+      -- * MonadTransControl & MonadControlIO
 --     , RegionControlIO, unsafeLiftControlIO
 --     , unsafeLiftControl
 --     , unsafeControlIO
@@ -68,7 +69,7 @@
 --     , liftCallCC
 --     , mapRegionT
 --     , liftCatch
---     ) where
+    ) where
 
 
 --------------------------------------------------------------------------------
@@ -76,7 +77,7 @@
 --------------------------------------------------------------------------------
 
 -- from base:
-import Prelude ((-))
+import Prelude ((-), (+), seq)
 import Control.Applicative (Applicative, Alternative)
 import Control.Category ((.), id)
 import Control.Exception (Exception)
@@ -345,135 +346,157 @@ class Dup h where
         => h (RegionT s (RegionT s' p))
         -> RegionT s (RegionT s' p) (h (RegionT s' p))
 
--- instance Dup FinalizerHandle where
---     dup = lift ∘ copy
--- 
--- copy ∷ MonadIO pr
---      ⇒ FinalizerHandle r
---      → RegionT s pr (FinalizerHandle (RegionT s pr))
--- copy (FinalizerHandle h@(RefCountedFinalizer _ refCntIORef)) =
---   RegionT $ ReaderT $ \hsIORef → liftIO $ mask_ $ do
---     increment refCntIORef
---     modifyIORef hsIORef (h:)
---     return $ FinalizerHandle h
--- 
--- increment ∷ IORef RefCnt → IO ()
--- increment ioRef = do refCnt' ← atomicModifyIORef ioRef $ \refCnt →
---                                  let refCnt' = refCnt + 1
---                                  in (refCnt', refCnt')
---                      refCnt' `seq` return ()
+instance Dup FinalizerHandle where
+    dup = lift . copy
 
 
---------------------------------------------------------------------------------
--- * Ancestor relation between regions
---------------------------------------------------------------------------------
-
-{-| The @AncestorRegion@ class is used to relate the region in which a resource
-was opened to the region in which it is used. Take the following operation from
-the @safer-file-handles@ package as an example:
-
-@hFileSize :: (pr \`AncestorRegion\` cr, MonadIO cr) => RegionalFileHandle ioMode pr -> cr Integer@
-
-The @AncestorRegion@ class defines the parent / child relationship between regions.
-The constraint
-
-@
-    pr \`AncestorRegion\` cr
-@
-
-is satisfied if and only if @cr@ is a sequence of zero or more \"@'RegionT' s@\"
-(with varying @s@) applied to @pr@, in other words, if @cr@ is an (improper)
-nested subregion of @pr@.
-
-The class constraint @InternalAncestorRegion pr cr@ serves two purposes. First, the
-instances of @InternalAncestorRegion@ do the type-level recursion that implements
-the relation specified above. Second, since it is not exported, user code cannot
-add new instances of 'AncestorRegion' (as these would have to be made instances of
-@InternalAncestorRegion@, too), effectively turning it into a /closed class/.
--}
-
--- The implementation uses type-level recursion, so it is no surprise we need
--- UndecidableInstances.
-
--- class (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
--- 
--- instance (InternalAncestorRegion pr cr) ⇒ AncestorRegion pr cr
--- 
--- class InternalAncestorRegion (pr ∷ * → *) (cr ∷ * → *)
--- 
--- instance InternalAncestorRegion (RegionT s m) (RegionT s m)
--- instance (InternalAncestorRegion pr cr) ⇒ InternalAncestorRegion pr (RegionT s cr)
+------------------------------------------------------------------------------
+copy :: MonadIO p
+     => FinalizerHandle r
+     -> RegionT s p (FinalizerHandle (RegionT s p))
+copy (FinalizerHandle h@(RefCountedFinalizer _ refCntIORef)) =
+    RegionT $ ReaderT $ \hsIORef -> liftIO $ E.mask_ $ do
+        increment refCntIORef
+        modifyIORef hsIORef (h:)
+        return . FinalizerHandle $ h
 
 
---------------------------------------------------------------------------------
--- * The root region
---------------------------------------------------------------------------------
-
-{-| The @RootRegion@ is the ancestor of any region.
-
-It's primary purpose is to tag regional handles which don't have an associated
-finalizer. For example the standard file handles @stdin@, @stdout@ and @stderr@
-which are opened on program startup and which shouldn't be closed when a region
-terminates. Another example is the @nullPtr@ which is a memory pointer which
-doesn't point to any allocated memory so doesn't need to be freed.
--}
--- data RootRegion α
-
--- instance InternalAncestorRegion RootRegion (RegionT s m)
-
-
---------------------------------------------------------------------------------
--- * Local regions
---------------------------------------------------------------------------------
-
-{-|
-A @LocalRegion@ is used to tag regional handles which are created locally.
-
-An example is the @LocalPtr@ in the @alloca@ function from the
-@regional-pointers@ package:
-
-@
-alloca :: (Storable a, MonadControlIO pr)
-       => (forall sl. LocalPtr a ('LocalRegion' sl s) -> RegionT ('Local' s) pr b)
-       -> RegionT s pr b
-@
-
-The finalisation of the @LocalPtr@ is not performed by the @regions@ library but
-is handled locally by @alloca@ instead.
-
-The type variable @sl@, which is only quantified over the continuation, ensures
-that locally opened resources don't escape.
--}
--- data LocalRegion sl s α
-
-{-|
-A type used to tag regions in which locally created handles (handles tagged with
-'LocalRegion') can be used.
-
-Note than any handle which is created in a @RegionT (Local s)@ can be used
-outside that region (@RegionT s@) and visa versa
-(except for 'LocalRegion'-tagged handles).
--}
--- data Local s
-
--- instance InternalAncestorRegion (LocalRegion sf s) (RegionT (Local s) m)
-
--- instance InternalAncestorRegion (RegionT        s  m) (RegionT (Local s) m)
--- instance InternalAncestorRegion (RegionT (Local s) m) (RegionT        s  m)
-
-{-|
-Convert a 'Local' region to a regular region.
-
-This function is unsafe because it allows you to use a 'LocalRegion'-tagged
-handle outside its 'Local' region.
--}
--- unsafeStripLocal ∷ RegionT (Local s) pr α → RegionT s pr α
--- unsafeStripLocal = RegionT ∘ unRegionT
+------------------------------------------------------------------------------
+increment :: IORef Int -> IO ()
+increment ioRef = do
+    refCnt' <- atomicModifyIORef ioRef $ \refCnt ->
+        let refCnt' = refCnt + 1
+        in  (refCnt', refCnt')
+    refCnt' `seq` return ()
 
 
 
 ------------------------------------------------------------------------------
--- * MonadTransControl & MonadControlIO
+-- * Ancestor relation between regions                                      --
+------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------
+-- | The @AncestorRegion@ class is used to relate the region in which
+-- a resource was opened to the region in which it is used. Take the following
+-- operation from the @safer-file-handles@ package as an example:
+-- 
+-- @hFileSize :: (pr \`AncestorRegion\` cr, MonadIO cr)
+--            => RegionalFileHandle ioMode pr
+--            -> cr Integer@
+-- 
+-- The @AncestorRegion@ class defines the parent / child relationship between
+-- regions.  The constraint
+-- 
+-- @
+--     pr \`AncestorRegion\` cr
+-- @
+-- 
+-- is satisfied if and only if @cr@ is a sequence of zero or more \"@'RegionT'
+-- s@\" (with varying @s@) applied to @pr@, in other words, if @cr@ is an
+-- (improper) nested subregion of @pr@.
+-- 
+-- The class constraint @InternalAncestorRegion pr cr@ serves two purposes.
+-- First, the instances of @InternalAncestorRegion@ do the type-level
+-- recursion that implements the relation specified above. Second, since it is
+-- not exported, user code cannot add new instances of 'AncestorRegion' (as
+-- these would have to be made instances of @InternalAncestorRegion@, too),
+-- effectively turning it into a /closed class/.
+--
+-- The implementation uses type-level recursion, so it is no surprise we need
+-- UndecidableInstances.
+
+class (InternalAncestorRegion p c) => AncestorRegion p c
+
+instance (InternalAncestorRegion p c) => AncestorRegion p c
+
+class InternalAncestorRegion (p :: * -> *) (cr :: * -> *)
+
+instance InternalAncestorRegion (RegionT s m) (RegionT s m)
+
+instance (InternalAncestorRegion p c)
+    => InternalAncestorRegion p (RegionT s c)
+
+
+
+------------------------------------------------------------------------------
+-- * The root region                                                        --
+------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------
+-- | The @RootRegion@ is the ancestor of any region.
+-- 
+-- Its primary purpose is to tag regional handles which don't have an
+-- associated finalizer. The standard file handles @stdin@, @stdout@, and
+-- @stderr@ are good examples because they are opened at program startup time
+-- and shouldn't be closed when a region terminates. Another example is the
+-- @nullPtr@. It is a memory pointer that doesn't point to any allocated
+-- memory and so it doesn't need to be freed.
+
+data RootRegion a
+
+instance InternalAncestorRegion RootRegion (RegionT s m)
+
+
+
+------------------------------------------------------------------------------
+-- * Local regions                                                          --
+------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------
+-- | A @LocalRegion@ is used to tag regional handles which are created
+-- locally.
+-- 
+-- An example is the @LocalPtr@ in the @alloca@ function from the
+-- @regional-pointers@ package:
+-- 
+-- @
+-- alloca :: (Storable a, MonadControlIO pr)
+--        => (forall sl. LocalPtr a ('LocalRegion' sl s)
+--        -> RegionT ('Local' s) pr b)
+--        -> RegionT s pr b
+-- @
+-- 
+-- The finalisation of the @LocalPtr@ is not performed by the @regions@
+-- library but is handled locally by @alloca@ instead.
+-- 
+-- The type variable @sl@, which is only quantified over the continuation,
+-- ensures that locally opened resources don't escape.
+
+data LocalRegion l s a
+
+
+------------------------------------------------------------------------------
+-- | A type used to tag regions in which locally created handles (handles
+-- tagged with 'LocalRegion') can be used.
+-- 
+-- Note than any handle which is created in a @RegionT (Local s)@ can be used
+-- outside that region (@RegionT s@) and vice versa (except for
+-- 'LocalRegion'-tagged handles).
+
+data Local s
+
+instance InternalAncestorRegion (LocalRegion f s) (RegionT (Local s) m)
+
+instance InternalAncestorRegion (RegionT s m) (RegionT (Local s) m)
+instance InternalAncestorRegion (RegionT (Local s) m) (RegionT s m)
+
+
+------------------------------------------------------------------------------
+-- | Convert a 'Local' region to a regular region.
+-- 
+-- This function is unsafe because it allows you to use a 'LocalRegion'-tagged
+-- handle outside its 'Local' region.
+
+unsafeStripLocal :: RegionT (Local s) pr a -> RegionT s pr a
+unsafeStripLocal = RegionT . unRegionT
+
+
+
+------------------------------------------------------------------------------
+-- * MonadTransControl & MonadControlIO                                     --
 ------------------------------------------------------------------------------
 
 

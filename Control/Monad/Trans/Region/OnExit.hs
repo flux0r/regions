@@ -10,12 +10,12 @@
 --
 --------------------------------------------------------------------------------
 
-module Control.Monad.Trans.Region.OnExit ( Finalizer
-                                         , FinalizerHandle
-                                         , onExit
-                                         ) where
+module Control.Monad.Trans.Region.OnExit
+    ( FinalizerHandle
+    , onExit
+    ) where
 
-import Control.Monad.Trans.Region.Internal ( Finalizer
-                                           , FinalizerHandle
-                                           , onExit
-                                           )
+import Control.Monad.Trans.Region.Internal
+    ( FinalizerHandle
+    , onExit
+    )

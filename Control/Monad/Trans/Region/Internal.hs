@@ -1,7 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude, GeneralizedNewtypeDeriving,
              KindSignatures, RankNTypes, ScopedTypeVariables,
              MultiParamTypeClasses, FlexibleInstances,
-             UndecidableInstances #-}
+             UndecidableInstances, EmptyDataDecls #-}
 
 -- {-# LANGUAGE CPP                        -- For portability.
 --            , UnicodeSyntax              -- Makes it look so nice.
